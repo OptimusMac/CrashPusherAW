@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command: postgres -p ${POSTGRES_PORT} -c listen_addresses='*'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    depends_on:
+      - postgres
+    environment:
+      SERVER_PORT: ${SERVER_PORT}
+      SPRING_APPLICATION_NAME: crashpusher
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      BOT_TOKEN: ${BOT_TOKEN}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      BOT_CHANNEL_FEEDBACK: ${BOT_CHANNEL_FEEDBACK}
+      BOT_CHANNEL_URL: ${BOT_CHANNEL_URL}
+      FILE_UPLOAD_DIR: /app/uploads
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION}
+    volumes:
+      - ./uploads:/app/uploads
+    ports:
+      - "${BACKEND_PORT}:${BACKEND_PORT}"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: ${VITE_API_BASE}
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT}:${FRONTEND_PORT}"
+    environment:
+      VITE_API_BASE: ${VITE_API_BASE}
+      FRONTEND_PORT: ${FRONTEND_PORT}
+      BACKEND_PORT: ${BACKEND_PORT}
+
+volumes:
+  pgdata:
