@@ -44,7 +44,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "${FRONTEND_PORT}:${FRONTEND_PORT}"
+      - "${FRONTEND_PORT}:80"
     environment:
       VITE_API_BASE: ${VITE_API_BASE}
       FRONTEND_PORT: ${FRONTEND_PORT}
