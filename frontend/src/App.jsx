@@ -1,7 +1,7 @@
 // App.jsx
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
-import Sidebar from "./components/Sidebar";
+import MainLayout from "./components/MainLayout";
 import DashboardPage from "./pages/DashboardPage";
 import UsersPage from "./pages/UsersPage";
 import GlobalCrashesPage from "./pages/GlobalCrashesPage";
@@ -11,12 +11,13 @@ import ExceptionDetailPage from "./pages/ExceptionDetailPage";
 import AuthPage from "./components/AuthPage";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AdminFilesPage from "./components/AdminFilesPage"
+import LogsPage from "./pages/LogsPage";
 
 // Компонент лейаута
 const Layout = ({ children }) => (
   <div className="min-h-screen flex">
-    <Sidebar />
-    <main className="flex-1 p-6 overflow-auto">
+    <MainLayout />
+    <main className="flex-1 overflow-auto">
       {children}
     </main>
   </div>
@@ -50,6 +51,14 @@ export default function App() {
         <ProtectedRoute requiredRoles={['ADMIN']}>
           <Layout>
             <AdminFilesPage  />
+          </Layout>
+        </ProtectedRoute>
+      } />
+
+      <Route path="/admin/logs" element={
+        <ProtectedRoute requiredRoles={['ADMIN']}>
+          <Layout>
+            <LogsPage  />
           </Layout>
         </ProtectedRoute>
       } />

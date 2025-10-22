@@ -61,7 +61,7 @@ fi
 
 # ===== Назначаем безопасные порты >1024 =====
 BACKEND_PORT=$(find_free_port 8082)
-FRONTEND_PORT=$(find_free_port 3000)
+FRONTEND_PORT=$(find_free_port 80)
 POSTGRES_PORT=$(find_free_port 5433)
 JWT_SECRET=$(generate_sha256)
 JWT_EXPIRATION=86400000
@@ -94,6 +94,7 @@ CORS_ORIGIN=http://${LOCAL_IP}:${FRONTEND_PORT}
 JWT_SECRET=$JWT_SECRET
 JWT_EXPIRATION=$JWT_EXPIRATION
 FILE_UPLOAD_DIR=uploads
+SECRET_KEY_VALIDATION=secret_key_from_server_mod
 
 # ==== Бот ====
 BOT_TOKEN=your-token-here

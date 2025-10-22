@@ -36,16 +36,14 @@ public class AdminConfirmationToken {
     public AdminConfirmationToken(String token) {
         this.token = token;
         this.createdAt = LocalDateTime.now();
-        this.expiresAt = LocalDateTime.now().plusMinutes(30); // 30 минут
+        this.expiresAt = LocalDateTime.now().plusMinutes(30);
         this.used = false;
     }
 
-    // Проверка валидности токена
     public boolean isValid() {
         return !used && LocalDateTime.now().isBefore(expiresAt);
     }
 
-    // Пометить токен как использованный
     public void markAsUsed() {
         this.used = true;
         this.usedAt = LocalDateTime.now();

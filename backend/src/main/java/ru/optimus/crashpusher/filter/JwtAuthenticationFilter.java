@@ -38,6 +38,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
+
+
         String authHeader = request.getHeader("Authorization");
 
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
@@ -71,10 +73,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    // ✅ Метод для определения публичных endpoints
     private boolean isPublicEndpoint(String requestURI) {
         return requestURI.startsWith("/api/auth/") ||
                 requestURI.startsWith("/api/public/") ||
-                requestURI.equals("/upload");
+                requestURI.equals("/upload") ||
+                requestURI.startsWith("/upload/logger");
     }
 }

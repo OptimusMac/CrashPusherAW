@@ -3,7 +3,6 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 
 export default defineConfig(({ mode }) => {
-  // 👇 Пробуем загрузить из разных мест
   const env = {
     ...process.env,  // сначала из process.env
     ...loadEnv(mode, path.resolve(__dirname, '..'), ''), // потом из файла
@@ -24,6 +23,10 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: 'dist',
-    }
+    },
+    optimizeDeps: {
+      include: ["react-window"],
+    },
   }
 })
+

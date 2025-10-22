@@ -168,22 +168,22 @@ api.interceptors.response.use(
     }
     
     // Обработка 403 Forbidden
-   if (error.response?.status === 403) {
-    console.log('🔐 403 received, access denied');
+  //  if (error.response?.status === 403) {
+  //   console.log('🔐 403 received, access denied');
     
-    // Удаляем токен при 403
-    removeToken();
+  //   // Удаляем токен при 403
+  //   removeToken();
     
-    const currentPath = window.location.pathname;
-    if (currentPath.includes('/users') || currentPath.includes('/admin')) {
+  //   const currentPath = window.location.pathname;
+  //   if (currentPath.includes('/users') || currentPath.includes('/admin')) {
 
-      setTimeout(() => {
-        window.location.href = '/auth?message=access_denied';
-      }, 100);
-    }
+  //     setTimeout(() => {
+  //       window.location.href = '/auth?message=access_denied';
+  //     }, 100);
+  //   }
     
-    return Promise.reject(error);
-  }
+  //   return Promise.reject(error);
+  // }
       
     return Promise.reject(error);
   }

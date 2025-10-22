@@ -1,324 +1,349 @@
-import React, { useEffect, useState } from "react";
-import { fetchGlobalCrashes, fetchCrashById, updateCrashFixStatus} from "../api/crashApi";
+import React, { useEffect, useState, useMemo, useRef, useCallback, memo } from "react";
+import { FixedSizeList } from "react-window";
+import { fetchGlobalCrashes, fetchCrashById, updateCrashFixStatus } from "../api/crashApi";
+import { fetchGlobalCrashesOptimized, fetchCrashByIdOptimized, clearCache } from "../api/optimizedCrashApi";
+import { useAutoRefresh } from "../hooks/useAutoRefresh";
+import { 
+  extractExceptionType, 
+  getPlayerName, 
+  getCrashReason, 
+  getFilteredCrashContent, 
+  getSystemInfoContent 
+} from "../utils/crashUtils";
 import SearchBar from "../components/SearchBar";
 import CrashViewer from "../components/CrashViewer";
 
-function GlobalCrashCard({ crash, isExpanded, onToggle, selectedCrash, onFixStatusChange }) {
-  // Используем selectedCrash если он соответствует текущему crash
-  const displayed = isExpanded && selectedCrash?.id === crash.id 
-    ? selectedCrash 
-    : crash;
+// Базовые компоненты UI
+const LoadingSpinner = memo(({ text = "Loading..." }) => (
+  <div className="p-8 text-center">
+    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-500 mx-auto mb-2" />
+    <div className="text-gray-400 text-sm">{text}</div>
+  </div>
+));
 
-  const getPlayerName = (crashData) => {
-    return crashData?.playerName ||
-           crashData?.player?.username ||
-           crashData?.username ||
-           crashData?.user?.username ||
-           crashData?.lastPlayer ||
-           crashData?.example?.playerName ||
-           crashData?.example?.username ||
-           crashData?.examplePlayer ||
-           "Unknown";
-  };
+const EmptyState = memo(({ hasFilters }) => (
+  <div className="text-center text-gray-400 py-12">
+    <div className="text-4xl mb-3">🐛</div>
+    {hasFilters ? "No crashes match your filters" : "No crashes found"}
+  </div>
+));
 
-  const getCrashReason = (crashData) => {
-    return crashData?.signature ||
-           crashData?.reason ||
-           crashData?.summary ||
-           crashData?.error ||
-           crashData?.message ||
-           "No reason provided";
-  };
-
-  // Функция для форматирования даты
-  const formatDate = (dateString) => {
-    if (!dateString) return "—";
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch (e) {
-      return dateString;
-    }
-  };
-
-  // Функция для фильтрации контента - убираем системную информацию
-  const getFilteredCrashContent = (content) => {
-    if (!content) return "";
-    
-    const systemInfoStart = content.indexOf("==========================================================================================\n");
-    if (systemInfoStart === -1) return content;
-    
-    return content.substring(0, systemInfoStart).trim();
-  };
-
-  // Функция для получения только системной информации (без вступлений)
-  const getSystemInfoContent = (content) => {
-    if (!content) return "";
-    
-    const systemInfoStart = content.indexOf("==========================================================================================\n");
-    if (systemInfoStart === -1) return "";
-    
-    let systemContent = content.substring(systemInfoStart);
-    const lines = systemContent.split('\n');
-    const filteredLines = [];
-    let skipMode = false;
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      
-      if (line.startsWith("??????????????????????????????????????????????")) {
-        skipMode = !skipMode;
-        continue;
-      }
-      
-      if (skipMode) continue;
-      
-      if (!skipMode && !line.startsWith("??????????????????????????????????????????????")) {
-        filteredLines.push(lines[i]);
-      }
-    }
-    
-    return filteredLines.join('\n').trim();
-  };
-
-  const handleMarkFixed = () => {
-    onFixStatusChange(crash.exampleId || crash.id, true);
-  };
-
-  const handleMarkRefix = () => {
-    onFixStatusChange(crash.exampleId || crash.id, false);
-  };
-
-  const playerName = getPlayerName(displayed);
-  const crashReason = getCrashReason(displayed);
-  const idDisplay = displayed?.id ?? crash?.id ?? "—";
-  const crashContent = getFilteredCrashContent(displayed?.content);
+const ActionButton = memo(({ 
+  onClick, 
+  children, 
+  variant = 'primary',
+  disabled = false,
+  className = '',
+  size = 'md'
+}) => {
+  const baseClasses = 'rounded transition-colors border flex items-center justify-center font-medium';
   
-  const systemInfoCrash = displayed?.content ? {
-    ...displayed,
-    content: getSystemInfoContent(displayed.content)
-  } : displayed;
+  const sizeClasses = {
+    sm: 'px-3 py-1 text-sm',
+    md: 'px-4 py-2 text-sm'
+  };
+
+  const variantClasses = {
+    primary: 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border-purple-500/30 hover:border-purple-500/50',
+    danger: 'bg-red-500/20 hover:bg-red-500/30 text-red-300 border-red-500/30 hover:border-red-500/50',
+    success: 'bg-green-500/20 hover:bg-green-500/30 text-green-300 border-green-500/30 hover:border-green-500/50',
+    warning: 'bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border-orange-500/30 hover:border-orange-500/50',
+    secondary: 'bg-gray-700/50 hover:bg-gray-600/50 text-gray-300 border-gray-600/50 hover:border-gray-500/50'
+  };
 
   return (
-    <div className={`bg-panel border rounded-lg p-4 transition-all mb-3 ${
-      isExpanded ? "border-accentTeal border-2" : "border-border hover:border-gray-500"
-    } ${crash.isFix ? 'opacity-80' : ''}`}>
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
-        <div className="flex-1">
-          {/* Header with ID, status and count */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-3">
-            <div className="flex items-center gap-2">
-              <div className="font-semibold text-white text-lg">Crash #{idDisplay}</div>
-              {crash.isFix && (
-                <div className="bg-green-600 text-white text-xs px-2 py-1 rounded-full font-medium flex items-center gap-1">
-                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                  Fixed
-                </div>
-              )}
-              {!crash.isFix && (
-                <div className="bg-accentRed text-white text-xs px-2 py-1 rounded-full font-medium flex items-center gap-1">
-                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
-                  Not Fixed
-                </div>
-              )}
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`${baseClasses} ${sizeClasses[size]} ${variantClasses[variant]} ${className} ${
+        disabled ? 'opacity-50 cursor-not-allowed' : ''
+      }`}
+    >
+      {children}
+    </button>
+  );
+});
+
+const VirtualizedLine = memo(({ index, style, data }) => {
+  const line = data.lines[index];
+  return (
+    <div style={style} className="flex">
+      <div className="w-10 flex-shrink-0">
+        <span className="text-gray-400 text-xs select-none block text-right pr-2">
+          {index + 1}
+        </span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <pre className="font-mono text-sm whitespace-pre-wrap break-words overflow-wrap-anywhere leading-relaxed m-0 text-gray-300">
+          {line}
+        </pre>
+      </div>
+    </div>
+  );
+});
+
+// Карточка краша
+const GlobalCrashCard = memo(({
+  crash,
+  isExpanded,
+  onToggle,
+  selectedCrash,
+  onFixStatusChange,
+  listHeight
+}) => {
+  const displayed = isExpanded && selectedCrash?.id === crash.id ? selectedCrash : crash;
+
+  const handleMarkFixed = useCallback(() => {
+    onFixStatusChange(crash.exampleId || crash.id, true);
+  }, [crash.exampleId, crash.id, onFixStatusChange]);
+
+  const handleMarkRefix = useCallback(() => {
+    onFixStatusChange(crash.exampleId || crash.id, false);
+  }, [crash.exampleId, crash.id, onFixStatusChange]);
+
+  const crashContent = useMemo(() => 
+    getFilteredCrashContent(displayed?.content || ""),
+    [displayed?.content]
+  );
+  
+  const systemInfoCrash = useMemo(() => {
+    if (!displayed?.content) return displayed;
+    return {
+      ...displayed,
+      content: getSystemInfoContent(displayed.content)
+    };
+  }, [displayed]);
+
+  const logLines = useMemo(() => 
+    crashContent ? crashContent.split("\n") : [],
+    [crashContent]
+  );
+
+  const listRef = useRef(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
+  const scrollToTop = useCallback(() => {
+    listRef.current?.scrollTo(0);
+  }, []);
+
+  const playerName = useMemo(() => 
+    getPlayerName(displayed || crash),
+    [displayed, crash]
+  );
+
+  const crashReason = useMemo(() => 
+    getCrashReason(displayed || crash),
+    [displayed, crash]
+  );
+
+  return (
+    <div className={`bg-gray-800/30 rounded-xl p-4 lg:p-6 border transition-all mb-4 ${
+      isExpanded ? "border-purple-500/50 border-2" : "border-gray-700/30 hover:border-gray-600/50"
+    } ${crash.isFix ? "opacity-80" : ""}`}>
+      <div className="flex flex-col gap-4">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="font-semibold text-white text-lg">
+              Crash #{displayed?.id ?? crash?.id}
             </div>
-            <div className="flex gap-2">
-              {crash.count > 1 && (
-                <div className="bg-accentRed text-white text-xs px-3 py-1 rounded-full font-medium">
-                  {crash.count} occurrences
-                </div>
-              )}
-              {crash.signature && (
-                <div className="bg-blue-600 text-white text-xs px-3 py-1 rounded-full font-medium">
-                  {extractExceptionType(crash.signature)}
-                </div>
-              )}
-            </div>
-          </div>
-          
-          {/* Date information */}
-          <div className="flex flex-wrap gap-4 text-sm text-textSecondary mb-3">
-            <div className="flex items-center gap-1">
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
-              </svg>
-              <span>Created: {formatDate(crash.createAt)}</span>
-            </div>
-            {crash.lastCreateAt && crash.lastCreateAt !== crash.createAt && (
-              <div className="flex items-center gap-1">
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+
+            {crash.isFix ? (
+              <div className="bg-green-500/20 text-green-300 text-xs px-2 py-1 rounded-full flex items-center gap-1 border border-green-500/30">
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                 </svg>
-                <span>Last: {formatDate(crash.lastCreateAt)}</span>
+                Fixed
+              </div>
+            ) : (
+              <div className="bg-red-500/20 text-red-300 text-xs px-2 py-1 rounded-full flex items-center gap-1 border border-red-500/30">
+                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+                Not Fixed
+              </div>
+            )}
+
+            {crash.count > 1 && (
+              <div className="bg-purple-500/20 text-purple-300 text-xs px-3 py-1 rounded-full border border-purple-500/30">
+                {crash.count} occurrences
               </div>
             )}
           </div>
 
-          {/* Player and Exception info */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-white font-medium min-w-[60px]">Player:</span>
-              <span className="text-sm text-textSecondary">{playerName}</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="text-sm text-white font-medium min-w-[80px] shrink-0">Exception:</span>
-              <span className="text-sm text-textSecondary break-words flex-1">
-                {String(crashReason).slice(0, 150) + (String(crashReason).length > 150 ? "..." : "")}
-              </span>
-            </div>
+          <div className="flex gap-2">
+            <ActionButton onClick={onToggle} variant="primary">
+              {isExpanded ? "Hide" : "View"}
+            </ActionButton>
+          </div>
+        </div>
+
+        {/* Player & Exception */}
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-white font-medium min-w-[60px]">Player:</span>
+            <span className="text-sm text-gray-300 break-all">{playerName}</span>
           </div>
 
-          {/* Action buttons */}
-          <div className="flex flex-wrap gap-2 mt-4">
-            {!crash.isFix ? (
-              <button
-                onClick={handleMarkFixed}
-                className="bg-green-600 text-white text-sm px-4 py-2 rounded-md hover:bg-green-700 transition font-medium flex items-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                </svg>
-                Mark as Fixed
-              </button>
-            ) : (
-              <button
-                onClick={handleMarkRefix}
-                className="bg-orange-600 text-white text-sm px-4 py-2 rounded-md hover:bg-orange-700 transition font-medium flex items-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-                Mark for Re-fix
-              </button>
-            )}
+          <div className="flex-1 flex items-start gap-2">
+            <span className="text-sm text-white font-medium min-w-[80px] shrink-0">Exception:</span>
+            <span className="text-sm text-gray-300 break-all">
+              {String(crashReason).slice(0, 150)}
+              {String(crashReason).length > 150 ? "..." : ""}
+            </span>
           </div>
+        </div>
 
-          {/* Expanded content */}
-          {isExpanded && (
-            <div className="mt-4 border-t border-border pt-4">
-              <CrashViewer crash={systemInfoCrash} />
-              
-              {crashContent && (
-                <div className="mt-4">
-                  <h4 className="text-white font-medium mb-2">Crash Log:</h4>
-                  <pre className="bg-black bg-opacity-50 p-3 rounded text-sm font-mono text-textSecondary whitespace-pre-wrap overflow-x-auto max-h-96 overflow-y-auto">
-                    {crashContent}
-                  </pre>
-                </div>
-              )}
-            </div>
+        {/* Action buttons */}
+        <div className="flex flex-wrap gap-2">
+          {!crash.isFix ? (
+            <ActionButton onClick={handleMarkFixed} variant="success" size="md">
+              Mark as Fixed
+            </ActionButton>
+          ) : (
+            <ActionButton onClick={handleMarkRefix} variant="warning" size="md">
+              Mark for Re-fix
+            </ActionButton>
           )}
         </div>
 
-        {/* View/Hide button */}
-        <div className="flex flex-col gap-2 self-start sm:self-auto">
-          <button
-            onClick={onToggle}
-            className="bg-accentTeal text-black text-sm px-4 py-2 rounded-md hover:opacity-90 transition font-medium min-w-[80px]"
-          >
-            {isExpanded ? "Hide" : "View"}
-          </button>
-        </div>
+        {/* Expanded Content */}
+        {isExpanded && (
+          <div className="mt-4 border-t border-gray-700/30 pt-4 space-y-4">
+            {/* System Information */}
+            <div>
+              <h4 className="text-white font-medium mb-2">System Information:</h4>
+              <div className="bg-gray-900/50 rounded text-sm font-mono text-gray-300 overflow-auto p-3"
+                   style={{ maxHeight: Math.min(400, window.innerHeight * 0.4) }}>
+                <CrashViewer crash={systemInfoCrash} />
+              </div>
+            </div>
+
+            {/* Crash Log */}
+            <div>
+              <h4 className="text-white font-medium mb-2">Crash Log:</h4>
+              <div className="relative bg-gray-900/50 rounded text-sm font-mono text-gray-300 overflow-hidden">
+                <div style={{ height: listHeight, minWidth: 'min-content' }}>
+                  <FixedSizeList
+                    ref={listRef}
+                    height={listHeight}
+                    itemCount={logLines.length}
+                    itemSize={24}
+                    itemData={{ lines: logLines }}
+                    overscanCount={10}
+                    onScroll={({ scrollOffset }) => setShowScrollTop(scrollOffset > 200)}
+                    width="100%"
+                  >
+                    {VirtualizedLine}
+                  </FixedSizeList>
+                </div>
+
+                {showScrollTop && (
+                  <button
+                    onClick={scrollToTop}
+                    className="absolute right-3 bottom-3 bg-purple-500 text-white rounded-full p-2 shadow-lg hover:bg-purple-600 transition z-10"
+                    title="Scroll to top"
+                  >
+                    ↑
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
-}
+});
 
-// Helper function to extract exception type
-function extractExceptionType(signature) {
-  if (!signature) return "Unknown";
-  const match = signature.match(/([A-Za-z0-9_.]+Exception)/);
-  return match ? match[1] : "Other";
-}
+const CrashCardSkeleton = memo(() => (
+  <div className="bg-gray-800/30 rounded-xl p-4 lg:p-6 border border-gray-700/30 mb-4 animate-pulse">
+    <div className="flex flex-col gap-4">
+      <div className="flex justify-between items-center">
+        <div className="h-6 bg-gray-700 rounded w-1/4"></div>
+        <div className="h-8 bg-gray-700 rounded w-20"></div>
+      </div>
+      <div className="h-4 bg-gray-700 rounded w-3/4"></div>
+      <div className="h-4 bg-gray-700 rounded w-1/2"></div>
+    </div>
+  </div>
+));
 
-export default function GlobalCrashesPage() {
+// Главный компонент
+const GlobalCrashesPage = () => {
   const [items, setItems] = useState([]);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("date_desc");
-  const [activeFilter, setActiveFilter] = useState(null);
   const [dateFilter, setDateFilter] = useState("all");
   const [fixFilter, setFixFilter] = useState("all");
   const [selectedCrashId, setSelectedCrashId] = useState(null);
   const [selectedCrash, setSelectedCrash] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [listHeight, setListHeight] = useState(400);
 
-  const load = async (q = "", s = sort) => {
+  // Основная функция загрузки данных
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchGlobalCrashes({ q, sort: s, grouped: true });
+      const data = await fetchGlobalCrashesOptimized({ 
+        q: query, 
+        sort: sort, 
+        grouped: true
+      });
       
-      let filteredData = data;
-      
+      let filtered = data || [];
+
+      // Применяем фильтры
       if (dateFilter !== "all") {
         const now = new Date();
-        filteredData = filteredData.filter(item => {
+        filtered = filtered.filter(item => {
           if (!item.createAt) return false;
           const itemDate = new Date(item.createAt);
-          
-          switch (dateFilter) {
-            case "today":
-              return itemDate.toDateString() === now.toDateString();
-            case "week":
-              const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-              return itemDate >= weekAgo;
-            case "month":
-              const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-              return itemDate >= monthAgo;
-            default:
-              return true;
-          }
+          if (dateFilter === "today") return itemDate.toDateString() === now.toDateString();
+          if (dateFilter === "week") return itemDate >= new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          if (dateFilter === "month") return itemDate >= new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          return true;
         });
       }
-      
+
       if (fixFilter !== "all") {
-        filteredData = filteredData.filter(item => {
-          switch (fixFilter) {
-            case "fixed":
-              return item.isFix === true;
-            case "not_fixed":
-              return item.isFix === false;
-            default:
-              return true;
-          }
-        });
+        filtered = filtered.filter(item => (fixFilter === "fixed" ? item.isFix : !item.isFix));
       }
-      
-      setItems(filteredData);
-    } catch (e) {
-      console.error(e);
+
+      setItems(filtered);
+    } catch (error) {
+      console.error('Failed to load crashes:', error);
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    load(query, sort);
   }, [query, sort, dateFilter, fixFilter]);
 
-  useEffect(() => {
-    const interval = setInterval(() => load(query, sort), 30000);
-    return () => clearInterval(interval);
-  }, [query, sort, dateFilter, fixFilter]);
+  // Автообновление каждые 30 секунд
+  useAutoRefresh(loadData, 30000);
 
-  const openCrash = async (crash) => {
-    if (selectedCrashId === crash.exampleId) {
+  // Загрузка при монтировании и изменении фильтров
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Очистка кэша при размонтировании
+  useEffect(() => {
+    return () => {
+      clearCache();
+    };
+  }, []);
+
+  const openCrash = useCallback(async (crash) => {
+    const key = crash.exampleId ?? crash.id;
+    
+    if (selectedCrashId === key) {
       setSelectedCrashId(null);
       setSelectedCrash(null);
       return;
     }
 
-    setSelectedCrashId(crash.exampleId);
-
+    setSelectedCrashId(key);
+    
     if (crash.fullData) {
       setSelectedCrash(crash.fullData);
       return;
@@ -327,207 +352,163 @@ export default function GlobalCrashesPage() {
     setSelectedCrash(crash);
 
     try {
-      const full = await fetchCrashById(crash.exampleId);
+      const full = await fetchCrashByIdOptimized(key);
+      const fullData = { ...crash, ...full, content: full?.content };
       
-      const fullCrashWithData = {
-        ...crash,
-        ...full,
-        content: full.content
-      };
+      setSelectedCrash(fullData);
       
-      setSelectedCrash(fullCrashWithData);
       setItems(prev => prev.map(item => 
-        item.exampleId === crash.exampleId ? { ...item, fullData: fullCrashWithData } : item
+        (item.exampleId === key || item.id === key) 
+          ? { ...item, fullData } 
+          : item
+      ));
+    } catch (error) {
+      console.error('Failed to load crash details:', error);
+    }
+  }, [selectedCrashId]);
+
+  const handleFixStatusChange = useCallback(async (crashId, isFixed) => {
+    try {
+      await updateCrashFixStatus(crashId, isFixed);
+      setItems(prev => prev.map(item => 
+        (item.exampleId === crashId || item.id === crashId) 
+          ? { ...item, isFix: isFixed } 
+          : item
       ));
     } catch (e) {
       console.error(e);
     }
-  };
+  }, []);
 
- // Функция для изменения статуса фикса
-    const handleFixStatusChange = async (crashId, isFixed) => {
-    try {
-        // Вызываем API для изменения статуса фикса
-        await updateCrashFixStatus(crashId, isFixed);
-        
-        // Обновляем локальное состояние после успешного запроса
-        setItems(prev => prev.map(item => 
-        (item.exampleId === crashId || item.id === crashId) 
-            ? { ...item, isFix: isFixed }
-            : item
-        ));
-        
-        // Можно добавить toast-уведомление для пользователя
-        // toast.success(`Crash ${crashId} marked as ${isFixed ? 'fixed' : 'needs re-fix'}`);
-        
-    } catch (error) {
-        console.error('Error updating fix status:', error);
-        
-        // Показываем ошибку пользователю
-        // toast.error('Failed to update crash status');
-        
-        // Откатываем изменения в случае ошибки
-        setItems(prev => prev.map(item => 
-        (item.exampleId === crashId || item.id === crashId) 
-            ? { ...item, isFix: !isFixed } // возвращаем предыдущее состояние
-            : item
-        ));
-    }
-    };
-
-  const refresh = () => {
-    load(query, sort);
-  };
-
-  const clearAllFilters = () => {
-    setActiveFilter(null);
-    setQuery("");
-    setDateFilter("all");
-    setFixFilter("all");
-  };
-
-  const topCrashes = Object.values(
-    items.reduce((acc, item) => {
+  const topCrashes = useMemo(() => {
+    return Object.values(items.reduce((acc, item) => {
       const type = extractExceptionType(item.signature);
       if (!acc[type]) acc[type] = { type, count: 0 };
       acc[type].count += item.count || 0;
       return acc;
-    }, {})
-  )
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 6);
+    }, {})).sort((a, b) => b.count - a.count).slice(0, 6);
+  }, [items]);
 
-  const filterByType = (type) => {
-    if (activeFilter === type) {
-      setActiveFilter(null);
-      setQuery("");
-    } else {
-      setActiveFilter(type);
-      setQuery(type);
-    }
-  };
+  const filterByType = useCallback((type) => {
+    setQuery(type);
+  }, []);
 
-  const hasActiveFilters = activeFilter || dateFilter !== "all" || fixFilter !== "all";
+  const clearAllFilters = useCallback(() => {
+    setQuery("");
+    setDateFilter("all");
+    setFixFilter("all");
+  }, []);
+
+  const hasActiveFilters = query || dateFilter !== "all" || fixFilter !== "all";
+
+  // Настройка высоты списка
+  useEffect(() => {
+    const onResize = () => {
+      setListHeight(Math.min(600, Math.round(window.innerHeight * 0.4)));
+    };
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   return (
-    <div className="container mx-auto px-4 py-6">
-      <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
-        {/* Main content - crashes list */}
-        <div className="xl:col-span-3">
-          {/* Header */}
-          <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center mb-6">
-            <h2 className="text-2xl lg:text-3xl font-bold text-white">Global Crashes</h2>
-            <div className="flex-1 w-full lg:w-auto">
-              <SearchBar onSearch={setQuery} placeholder="Search crash signature or player..." />
-            </div>
-            <div className="flex gap-3 w-full lg:w-auto">
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value)}
-                className="bg-panel border border-gray-600 text-white px-3 py-2 rounded-md flex-1 lg:flex-none"
-              >
-                <option value="date_desc">Newest First</option>
-                <option value="date_asc">Oldest First</option>
-                <option value="count_desc">Most Frequent</option>
-              </select>
-              <button 
-                onClick={refresh} 
-                className="bg-accentTeal text-black px-4 py-2 rounded-md hover:opacity-90 transition font-medium whitespace-nowrap"
-              >
-                Refresh
-              </button>
-            </div>
+    <div className="max-w-7xl mx-auto p-4 sm:p-6">
+      {/* Header */}
+      <div className="mb-6 lg:mb-8">
+        <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">
+          Global Crashes
+        </h1>
+        <p className="text-gray-400 text-sm sm:text-base">
+          Monitor and analyze system crashes across all users
+        </p>
+      </div>
+
+      {/* Search and Controls */}
+      <div className="bg-gray-800/30 rounded-xl p-4 lg:p-6 border border-gray-700/30 mb-6">
+        <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+          <div className="flex-1 w-full">
+            <SearchBar 
+              onSearch={setQuery} 
+              placeholder="Search crash signature or player..." 
+            />
           </div>
-
-          {/* Filters row */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-6 p-4 bg-panel rounded-lg border border-border">
-            <div className="flex flex-col sm:flex-row gap-4 flex-1">
-              {/* Date filter */}
-              <div className="flex flex-col">
-                <label className="text-sm text-textSecondary mb-1 font-medium">Date Range</label>
-                <select
-                  value={dateFilter}
-                  onChange={(e) => setDateFilter(e.target.value)}
-                  className="bg-panel border border-gray-600 text-white px-3 py-2 rounded-md min-w-[140px]"
-                >
-                  <option value="all">All Time</option>
-                  <option value="today">Today</option>
-                  <option value="week">Last 7 Days</option>
-                  <option value="month">Last 30 Days</option>
-                </select>
-              </div>
-
-              {/* Fix status filter */}
-              <div className="flex flex-col">
-                <label className="text-sm text-textSecondary mb-1 font-medium">Fix Status</label>
-                <select
-                  value={fixFilter}
-                  onChange={(e) => setFixFilter(e.target.value)}
-                  className="bg-panel border border-gray-600 text-white px-3 py-2 rounded-md min-w-[140px]"
-                >
-                  <option value="all">All Statuses</option>
-                  <option value="fixed">Fixed Only</option>
-                  <option value="not_fixed">Not Fixed</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Clear filters button */}
-            {hasActiveFilters && (
-              <div className="flex items-end">
-                <button
-                  onClick={clearAllFilters}
-                  className="bg-accentRed text-white px-4 py-2 rounded-md hover:bg-red-700 transition font-medium whitespace-nowrap h-fit"
-                >
-                  Clear All Filters
-                </button>
-              </div>
-            )}
+          
+          <div className="flex gap-2 w-full sm:w-auto">
+            <select 
+              value={sort} 
+              onChange={e => setSort(e.target.value)} 
+              className="flex-1 sm:flex-none bg-gray-700/50 border border-gray-600/50 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500/50"
+            >
+              <option value="date_desc">Newest First</option>
+              <option value="date_asc">Oldest First</option>
+              <option value="count_desc">Most Frequent</option>
+            </select>
+            <ActionButton 
+              onClick={loadData}
+              variant="secondary"
+              size="md"
+              className="flex-1 sm:flex-none"
+              disabled={loading}
+            >
+              {loading ? "..." : "Refresh"}
+            </ActionButton>
           </div>
+        </div>
+      </div>
 
-          {/* Active filter indicator */}
-          {activeFilter && (
-            <div className="mb-4 p-3 bg-accentTeal bg-opacity-20 border border-accentTeal rounded-lg flex items-center justify-between">
-              <span className="text-accentTeal font-medium">
-                Filtered by exception: {activeFilter}
-              </span>
-              <button
-                onClick={() => {
-                  setActiveFilter(null);
-                  setQuery("");
-                }}
-                className="text-accentTeal hover:text-white text-sm font-medium"
-              >
-                Clear
-              </button>
-            </div>
-          )}
+      {/* Desktop filters */}
+      <div className="hidden sm:flex flex-wrap gap-4 p-4 lg:p-6 bg-gray-800/30 rounded-xl border border-gray-700/30 mb-6 items-center">
+        <select 
+          value={dateFilter} 
+          onChange={e => setDateFilter(e.target.value)} 
+          className="bg-gray-700/50 border border-gray-600/50 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-purple-500/50"
+        >
+          <option value="all">All Time</option>
+          <option value="today">Today</option>
+          <option value="week">Last 7 Days</option>
+          <option value="month">Last 30 Days</option>
+        </select>
 
-          {/* Crashes list */}
-          <div>
-            {loading && (
-              <div className="text-textSecondary text-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accentTeal mx-auto mb-2"></div>
-                Loading crashes...
+        <select 
+          value={fixFilter} 
+          onChange={e => setFixFilter(e.target.value)} 
+          className="bg-gray-700/50 border border-gray-600/50 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-purple-500/50"
+        >
+          <option value="all">All Statuses</option>
+          <option value="fixed">Fixed Only</option>
+          <option value="not_fixed">Not Fixed</option>
+        </select>
+
+        {hasActiveFilters && (
+          <ActionButton onClick={clearAllFilters} variant="danger" size="md" className="ml-auto">
+            Clear All
+          </ActionButton>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Main list */}
+        <div className="lg:col-span-3">
+          <div className="bg-gray-800/30 rounded-xl border border-gray-700/30 overflow-hidden">
+            {loading ? (
+              <div className="p-4 space-y-4">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <CrashCardSkeleton key={i} />
+                ))}
               </div>
-            )}
-            
-            {!loading && items.length === 0 && (
-              <div className="text-textSecondary text-center py-12 text-lg">
-                {hasActiveFilters ? "No crashes match your filters" : "No crashes found"}
-              </div>
-            )}
-
-            {!loading && items.length > 0 && (
-              <div className="space-y-4">
-                {items.map((crash) => (
+            ) : items.length === 0 ? (
+              <EmptyState hasFilters={hasActiveFilters} />
+            ) : (
+              <div className="p-4 space-y-4">
+                {items.map(crash => (
                   <GlobalCrashCard
                     key={crash.id || crash.exampleId}
                     crash={crash}
-                    isExpanded={selectedCrashId === crash.exampleId}
+                    isExpanded={selectedCrashId === (crash.exampleId ?? crash.id)}
                     selectedCrash={selectedCrash}
                     onToggle={() => openCrash(crash)}
                     onFixStatusChange={handleFixStatusChange}
+                    listHeight={listHeight}
                   />
                 ))}
               </div>
@@ -535,72 +516,67 @@ export default function GlobalCrashesPage() {
           </div>
         </div>
 
-        {/* Sidebar - top crashes */}
-        <div className="xl:col-span-1">
-          <div className="bg-panel rounded-xl p-4 xl:sticky xl:top-6 border border-border">
-            <h3 className="font-semibold text-lg mb-4 pb-3 border-b border-border text-white">
+        {/* Desktop sidebar */}
+        <aside className="hidden lg:block">
+          <div className="bg-gray-800/30 rounded-xl p-4 lg:p-6 border border-gray-700/30 sticky top-6">
+            <h3 className="font-semibold text-lg mb-4 pb-3 border-b border-gray-700/30 text-white">
               Top Exception Types
             </h3>
-            
-            {topCrashes.length === 0 && (
-              <div className="text-textSecondary text-sm text-center py-6">No data available</div>
-            )}
-            
-            <div className="space-y-2">
-              {topCrashes.map((t) => (
-                <div
-                  key={t.type}
-                  onClick={() => filterByType(t.type)}
-                  className={`flex justify-between items-center p-3 rounded-lg cursor-pointer transition ${
-                    activeFilter === t.type
-                      ? "bg-accentTeal bg-opacity-20 border border-accentTeal"
-                      : "hover:bg-white hover:bg-opacity-5"
-                  }`}
-                >
-                  <div className="text-sm truncate flex-1 font-medium text-white" title={t.type}>
-                    {t.type}
-                  </div>
-                  <div className={`text-sm font-bold ml-2 px-2 py-1 rounded ${
-                    activeFilter === t.type 
-                      ? "bg-accentTeal text-black" 
-                      : "bg-white bg-opacity-10 text-textSecondary"
-                  }`}>
-                    {t.count}
-                  </div>
-                </div>
-              ))}
-            </div>
 
-            {/* Stats summary */}
+            {topCrashes.length === 0 ? (
+              <div className="text-gray-400 text-sm text-center py-6">No data available</div>
+            ) : (
+              <div className="space-y-2">
+                {topCrashes.map(t => (
+                  <div
+                    key={t.type}
+                    onClick={() => filterByType(t.type)}
+                    className={`flex justify-between items-center p-3 rounded-lg cursor-pointer transition ${
+                      query === t.type 
+                        ? "bg-purple-500/20 border border-purple-500/30" 
+                        : "hover:bg-gray-700/30 border border-transparent"
+                    }`}
+                  >
+                    <div className="text-sm truncate flex-1 font-medium text-white" title={t.type}>
+                      {t.type}
+                    </div>
+                    <div className={`text-sm font-bold ml-2 px-2 py-1 rounded ${
+                      query === t.type 
+                        ? "bg-purple-500 text-white" 
+                        : "bg-gray-700/50 text-gray-300"
+                    }`}>
+                      {t.count}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {items.length > 0 && (
-              <div className="mt-6 pt-4 border-t border-border">
-                <div className="text-sm text-textSecondary space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-white">Total Crashes:</span>
-                    <span className="font-medium text-white">{items.reduce((sum, item) => sum + (item.count || 1), 0)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-white">Unique Types:</span>
-                    <span className="font-medium text-white">{topCrashes.length}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-green-400">Fixed:</span>
-                    <span className="font-medium text-green-400">
-                      {items.filter(item => item.isFix).length}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-accentRed">Not Fixed:</span>
-                    <span className="font-medium text-accentRed">
-                      {items.filter(item => !item.isFix).length}
-                    </span>
-                  </div>
+              <div className="mt-6 pt-4 border-t border-gray-700/30 text-sm text-gray-400 space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-white">Total Crashes:</span>
+                  <span className="font-medium text-white">{items.reduce((sum, item) => sum + (item.count || 1), 0)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white">Unique Types:</span>
+                  <span className="font-medium text-white">{topCrashes.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-green-400">Fixed:</span>
+                  <span className="font-medium text-green-400">{items.filter(item => item.isFix).length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-red-400">Not Fixed:</span>
+                  <span className="font-medium text-red-400">{items.filter(item => !item.isFix).length}</span>
                 </div>
               </div>
             )}
           </div>
-        </div>
+        </aside>
       </div>
     </div>
   );
-}
+};
+
+export default memo(GlobalCrashesPage);
