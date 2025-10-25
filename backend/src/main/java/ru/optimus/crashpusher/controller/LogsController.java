@@ -24,7 +24,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-@Slf4j(topic = "loger")
+@Slf4j(topic = "logger")
 @RestController
 @RequestMapping("/api/admin/logs")
 @RequiredArgsConstructor

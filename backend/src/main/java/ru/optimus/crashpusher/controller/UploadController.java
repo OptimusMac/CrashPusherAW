@@ -48,8 +48,6 @@ public class UploadController {
         if(!matchesToken(content.get("token").toString())){
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
-
-        System.out.println(content);
         Log logModel = new Log();
         logModel.setValue(content);
         logModel.setCreatedAt(LocalDateTime.now());

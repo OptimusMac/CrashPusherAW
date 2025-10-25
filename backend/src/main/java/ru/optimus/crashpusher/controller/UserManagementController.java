@@ -1,13 +1,21 @@
 package ru.optimus.crashpusher.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestTemplate;
+import ru.optimus.crashpusher.model.Log;
 import ru.optimus.crashpusher.model.User;
+import ru.optimus.crashpusher.service.LogService;
 import ru.optimus.crashpusher.service.UserService;
+import ru.optimus.crashpusher.ws.MinecraftWebSocketHandler;
 
 import java.util.HashMap;
 import java.util.List;
@@ -20,6 +28,11 @@ import java.util.Map;
 public class UserManagementController {
 
     private final UserService userService;
+    private final LogService logService;
+    private final MinecraftWebSocketHandler minecraftWebSocketHandler;
+
+    @Value("${secret_key_validation}")
+    private String token;
 
     @GetMapping
     public ResponseEntity<List<Map<String, Object>>> getUsers(
@@ -37,6 +50,42 @@ public class UserManagementController {
         }).toList();
 
         return ResponseEntity.ok(result);
+    }
+
+    @PostMapping("/back-item")
+    public ResponseEntity<?> backItem(@RequestParam Long id) {
+        try {
+            System.out.println("🔍 BackItem called with id: " + id);
+
+            Log log = logService.findById(id);
+            String player = (String) log.getValue().get("player");
+            Object items = log.getValue().get("items-data");
+
+            Map<String, Object> minecraftMessage = new HashMap<>();
+            minecraftMessage.put("type", "RESTORE_ITEMS");
+            minecraftMessage.put("player", player);
+            minecraftMessage.put("items-data", items);
+            minecraftMessage.put("logId", id);
+            minecraftMessage.put("timestamp", System.currentTimeMillis());
+            minecraftMessage.put("token", token);
+
+            String jsonMessage = new ObjectMapper().writeValueAsString(minecraftMessage);
+            minecraftWebSocketHandler.sendToMinecraft(jsonMessage);
+
+            System.out.println("✅ Message sent to Minecraft: " + jsonMessage);
+
+            return ResponseEntity.ok().body(Map.of(
+                    "status", "success",
+                    "message", "Restoration request sent to Minecraft server",
+                    "logId", id,
+                    "player", player
+            ));
+
+        } catch (Exception e) {
+            System.err.println("❌ Error in backItem: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.status(500).body("Error: " + e.getMessage());
+        }
     }
 
     @PutMapping("/{id}")

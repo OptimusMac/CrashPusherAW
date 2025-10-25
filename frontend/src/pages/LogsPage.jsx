@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useCallback, useMemo, memo } from "react";
-import { fetchLogs, fetchEventTypes } from "../api/userManagementApi";
+import { fetchLogs, fetchEventTypes, backItem } from "../api/userManagementApi";
 import { useAuth } from "../hooks/useAuth";
 import ValueRenderer from "../components/ValueRenderer";
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 // --------- Константы и утилиты ----------
 const STRING_TO_COLOR_CACHE = new Map();
@@ -42,6 +44,69 @@ const formatDate = (dateStr) => {
   if (diffMin > 0) return `${date.toLocaleString()} (${diffMin}m ago)`;
   return `${date.toLocaleString()} (${diffSec}s ago)`;
 };
+
+// --------- Кнопка восстановления предметов ----------
+const BackItemButton = memo(({ log, onRestore, restoring }) => {
+  const handleClick = useCallback(async (e) => {
+    e.stopPropagation();
+    console.log(log);
+    if (!log.id) {
+      console.error('Log ID is missing');
+      return;
+    }
+    await onRestore(log.id);
+  }, [log.id, onRestore]);
+
+  // Показываем кнопку только для DEATH событий с предметами
+  const hasItems = useMemo(() => 
+    log.items && (Array.isArray(log.items) ? log.items.length > 0 : Object.keys(log.items).length > 0),
+    [log.items]
+  );
+  
+  if (log.type !== 'DEATH' || !hasItems) {
+    return null;
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={restoring}
+      className={`
+        px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200
+        border flex items-center gap-2
+        ${restoring 
+          ? 'bg-gray-600/50 border-gray-500/50 text-gray-300 cursor-not-allowed' 
+          : 'bg-green-600/20 border-green-500/50 text-green-300 hover:bg-green-600/30 hover:border-green-400/50 hover:text-green-200'
+        }
+      `}
+    >
+      {restoring ? (
+        <>
+          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-green-300"></div>
+          Restoring...
+        </>
+      ) : (
+        <>
+          <svg 
+            className="w-3 h-3" 
+            fill="none" 
+            stroke="currentColor" 
+            viewBox="0 0 24 24"
+          >
+            <path 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              strokeWidth={2} 
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" 
+            />
+          </svg>
+          Restore Items
+        </>
+      )}
+    </button>
+  );
+});
+BackItemButton.displayName = 'BackItemButton';
 
 // --------- Оптимизированные компоненты ----------
 const LoadingSpinner = memo(({ text = "Loading..." }) => (
@@ -111,7 +176,7 @@ const AdditionalDataItem = memo(({ dataKey, value }) => (
 AdditionalDataItem.displayName = 'AdditionalDataItem';
 
 // --------- LogRow Component ----------
-const LogRow = memo(({ log, onExpand, expanded }) => {
+const LogRow = memo(({ log, onExpand, expanded, onRestoreItems, restoringLogId }) => {
   const time = log.timestamp || log.createdAt;
   const coords = useMemo(() => 
     ["x", "y", "z"].filter(k => log[k] !== undefined),
@@ -120,12 +185,13 @@ const LogRow = memo(({ log, onExpand, expanded }) => {
 
   const additionalData = useMemo(() => 
     Object.entries(log)
-      .filter(([key]) => !["type", "player", "timestamp", "createdAt", "x", "y", "z"].includes(key))
+      .filter(([key]) => !["type", "player", "timestamp", "createdAt", "x", "y", "z", "id"].includes(key))
       .reduce((acc, [key, val]) => ({ ...acc, [key]: val }), {}),
     [log]
   );
 
   const logId = useMemo(() => `${log.player}-${log.timestamp}`, [log.player, log.timestamp]);
+  const isRestoring = restoringLogId === log.id;
 
   const handleExpand = useCallback(() => {
     onExpand(logId);
@@ -135,9 +201,9 @@ const LogRow = memo(({ log, onExpand, expanded }) => {
     <div className="bg-gray-800/50 rounded-xl p-4 sm:p-5 mb-4 border border-gray-700/50 hover:border-gray-600/50 transition-all duration-300">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-3">
-        <div className="flex items-start gap-3 min-w-0">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
           <TypeBadge type={log.type} />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-base sm:text-lg font-semibold text-white truncate">
               {log.player || "Unknown"}
             </div>
@@ -146,8 +212,18 @@ const LogRow = memo(({ log, onExpand, expanded }) => {
             </div>
           </div>
         </div>
-        <div className="text-sm text-gray-400 hidden sm:block flex-shrink-0">
-          🕒 {formatDate(time)}
+        
+        <div className="flex items-center gap-3 flex-shrink-0">
+          {/* Кнопка восстановления предметов */}
+          <BackItemButton 
+            log={log} 
+            onRestore={onRestoreItems}
+            restoring={isRestoring}
+          />
+          
+          <div className="text-sm text-gray-400 hidden sm:block flex-shrink-0">
+            🕒 {formatDate(time)}
+          </div>
         </div>
       </div>
 
@@ -175,7 +251,6 @@ const LogRow = memo(({ log, onExpand, expanded }) => {
 
           {expanded && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
-              {/* ИСПРАВЛЕННЫЙ ВЫЗОВ - используем dataKey вместо key */}
               {Object.entries(additionalData).map(([dataKey, value]) => (
                 <AdditionalDataItem 
                   key={dataKey} 
@@ -447,6 +522,7 @@ const useLogsManagement = () => {
 const LogsPage = () => {
   const { user: currentUser, loading: authLoading } = useAuth();
   const [expandedLogId, setExpandedLogId] = useState(null);
+  const [restoringLogId, setRestoringLogId] = useState(null);
   
   const {
     logs,
@@ -469,6 +545,19 @@ const LogsPage = () => {
     setExpandedLogId(prev => prev === logId ? null : logId);
   }, []);
 
+  const handleRestoreItems = useCallback(async (logId) => {
+    setRestoringLogId(logId);
+    try {
+      await backItem(logId);
+      toast.success('Items restored successfully!');
+    } catch (error) {
+      console.error('Failed to restore items:', error);
+      toast.error('Failed to restore items. Please try again.');
+    } finally {
+      setRestoringLogId(null);
+    }
+  }, []);
+
   const hasActiveFilters = useMemo(() => 
     filters.search || filters.type || filters.player || filters.dateRange,
     [filters]
@@ -480,6 +569,19 @@ const LogsPage = () => {
 
   return (
     <div className="max-w-7xl mx-auto p-4 sm:p-6">
+      <ToastContainer
+        position="top-right"
+        autoClose={5000}
+        hideProgressBar={false}
+        newestOnTop={false}
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        theme="dark"
+      />
+      
       {/* Header */}
       <div className="mb-6 lg:mb-8">
         <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2">Game Logs</h1>
@@ -531,6 +633,8 @@ const LogsPage = () => {
                   log={log}
                   expanded={expandedLogId === logId}
                   onExpand={handleExpand}
+                  onRestoreItems={handleRestoreItems}
+                  restoringLogId={restoringLogId}
                 />
               );
             })}

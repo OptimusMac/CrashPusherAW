@@ -12,12 +12,15 @@ import java.util.Map;
 @NoArgsConstructor
 @AllArgsConstructor
 public class LogDTO {
+    private long id;
     private Map<String, Object> value;
     private LocalDateTime createdAt;
 
     public static LogDTO of(Log log){
-        LogDTO dto = new LogDTO(log.getValue(), log.getCreatedAt());
+        LogDTO dto = new LogDTO(log.getId(), log.getValue(), log.getCreatedAt());
         dto.getValue().remove("token");
+        dto.getValue().remove("items-data");
+        dto.getValue().put("id", log.getId());
         return dto;
     }
 }

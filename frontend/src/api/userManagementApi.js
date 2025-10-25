@@ -53,3 +53,8 @@ export const exportLogs = (params = {}) =>
     params,
     responseType: 'blob'
   }).then(r => r.data);
+  
+export const backItem = (logId) => 
+  api.post("/admin/users/back-item", null, { 
+    params: { id: logId } 
+  }).then(r => r.data);
